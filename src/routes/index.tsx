@@ -362,7 +362,7 @@ function MonitorScreen() {
     setRenaming(true)
 
     try {
-      const response = await fetch(`/api/captures/item/${renameTarget.id}`, {
+      const response = await fetch(`/api/capture-item/${renameTarget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed }),
@@ -410,7 +410,7 @@ function MonitorScreen() {
     setDeletingId(capture.id)
 
     try {
-      const response = await fetch(`/api/captures/item/${capture.id}`, {
+      const response = await fetch(`/api/capture-item/${capture.id}`, {
         method: 'DELETE',
       })
 
