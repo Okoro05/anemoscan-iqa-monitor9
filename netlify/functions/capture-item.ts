@@ -44,7 +44,7 @@ function toResponse(row: typeof captures.$inferSelect) {
 }
 
 function parseId(pathname: string) {
-  const raw = pathname.replace('/api/captures/item/', '')
+  const raw = pathname.replace('/api/capture-item/', '')
   const id = Number(raw)
   return Number.isInteger(id) && id > 0 ? id : null
 }
@@ -110,5 +110,5 @@ export default async (req: Request) => {
 }
 
 export const config: Config = {
-  path: '/api/captures/item/*',
+  path: '/api/capture-item/*',
 }
