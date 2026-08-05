@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
+  Activity,
   Aperture,
   Camera,
   CheckCircle2,
@@ -18,13 +19,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-
+ 
 export const Route = createFileRoute('/')({
   component: MonitorScreen,
 })
-
+ 
 const qualityThreshold = 65
-
+ 
 type FacingMode = 'user' | 'environment'
 type Metrics = {
   brightness: number
@@ -42,7 +43,7 @@ type SavedCapture = Metrics & {
   imageUrl: string
   createdAt: string
 }
-
+ 
 type PendingCapture = {
   dataUrl: string
   metrics: Metrics
@@ -50,50 +51,50 @@ type PendingCapture = {
   status: string
   capturedAt: Date
 }
-
+ 
 function defaultCaptureName(date: Date) {
   const pad = (value: number) => value.toString().padStart(2, '0')
   return `capture-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(
     date.getHours(),
   )}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
-
+ 
 const initialMetrics: Metrics = {
   brightness: 58,
   sharpness: 72,
   contrast: 54,
   overall: 61,
 }
-
+ 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value))
 }
-
+ 
 function round(value: number) {
   return Math.round(clamp(value))
 }
-
+ 
 function calculateMetricsFromImageData(imageData: ImageData): Metrics {
   const { data, width, height } = imageData
   const luminance = new Float32Array(width * height)
   let sum = 0
-
+ 
   for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
     const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114
     luminance[pixel] = gray
     sum += gray
   }
-
+ 
   const mean = sum / luminance.length
   let variance = 0
   let laplacianVariance = 0
   let laplacianCount = 0
-
+ 
   for (let i = 0; i < luminance.length; i += 1) {
     const diff = luminance[i] - mean
     variance += diff * diff
   }
-
+ 
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
       const idx = y * width + x
@@ -107,17 +108,17 @@ function calculateMetricsFromImageData(imageData: ImageData): Metrics {
       laplacianCount += 1
     }
   }
-
+ 
   const brightness = clamp((mean / 255) * 100)
   const contrast = clamp((Math.sqrt(variance / luminance.length) / 82) * 100)
   const sharpness = clamp(
     (Math.sqrt(laplacianVariance / Math.max(laplacianCount, 1)) / 22) * 100,
   )
   const overall = clamp(brightness * 0.3 + sharpness * 0.4 + contrast * 0.3)
-
+ 
   return { brightness, sharpness, contrast, overall }
 }
-
+ 
 function MonitorScreen() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -137,19 +138,22 @@ function MonitorScreen() {
   const [renameError, setRenameError] = useState('')
   const [renaming, setRenaming] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
-
+  const [predictions, setPredictions] = useState<
+    Record<number, { predictedHb: number; status: string } | 'loading' | 'error'>
+  >({})
+ 
   const accepted = metrics.overall >= qualityThreshold
   const status = accepted ? 'READY' : 'LOW QUALITY'
   const cameraLabel = facingMode === 'user' ? 'FRONT' : 'BACK'
-
+ 
   useEffect(() => {
     let stream: MediaStream | null = null
     let cancelled = false
-
+ 
     async function startCamera() {
       setCameraReady(false)
       setCameraError('')
-
+ 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
@@ -159,12 +163,12 @@ function MonitorScreen() {
           },
           audio: false,
         })
-
+ 
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop())
           return
         }
-
+ 
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           await videoRef.current.play()
@@ -175,15 +179,15 @@ function MonitorScreen() {
         setCameraReady(false)
       }
     }
-
+ 
     startCamera()
-
+ 
     return () => {
       cancelled = true
       stream?.getTracks().forEach((track) => track.stop())
     }
   }, [facingMode])
-
+ 
   useEffect(() => {
     async function loadCaptures() {
       try {
@@ -196,64 +200,64 @@ function MonitorScreen() {
         setCaptures([])
       }
     }
-
+ 
     loadCaptures()
   }, [])
-
+ 
   const analyzeFrame = useCallback(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
-
+ 
     if (!video || !canvas || video.readyState < 2) {
       return
     }
-
+ 
     const width = 160
     const height = Math.max(90, Math.round((video.videoHeight / video.videoWidth) * width))
     const context = canvas.getContext('2d', { willReadFrequently: true })
-
+ 
     if (!context) {
       return
     }
-
+ 
     canvas.width = width
     canvas.height = height
     context.drawImage(video, 0, 0, width, height)
     setMetrics(calculateMetricsFromImageData(context.getImageData(0, 0, width, height)))
   }, [])
-
+ 
   useEffect(() => {
     const timer = window.setInterval(analyzeFrame, 500)
     return () => window.clearInterval(timer)
   }, [analyzeFrame])
-
+ 
   const captureSnapshot = useCallback(() => {
     if (!accepted) {
       setSaveMessage(`Score must reach ${qualityThreshold} before you can capture.`)
       return
     }
-
+ 
     const video = videoRef.current
-
+ 
     if (!video || video.readyState < 2) {
       setSaveMessage('Camera frame is not ready yet.')
       return
     }
-
+ 
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth || 1280
     canvas.height = video.videoHeight || 720
     const context = canvas.getContext('2d')
-
+ 
     if (!context) {
       setSaveMessage('Unable to capture this frame.')
       return
     }
-
+ 
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
     const capturedAt = new Date()
-
+ 
     // Freeze the metrics/labels at the moment of capture so the save dialog
     // reflects exactly what was true when the shutter was pressed, even if
     // the live feed keeps analyzing frames while the user types a name.
@@ -262,28 +266,28 @@ function MonitorScreen() {
     setNameError('')
     setSaveMessage('')
   }, [accepted, cameraLabel, metrics, status])
-
+ 
   const cancelPendingCapture = useCallback(() => {
     setPendingCapture(null)
     setCaptureName('')
     setNameError('')
   }, [])
-
+ 
   const confirmSaveCapture = useCallback(async () => {
     if (!pendingCapture) {
       return
     }
-
+ 
     const trimmedName = captureName.trim()
-
+ 
     if (!trimmedName) {
       setNameError('Enter a name for this snapshot before saving.')
       return
     }
-
+ 
     setSaving(true)
     setSaveMessage('Saving capture...')
-
+ 
     try {
       const response = await fetch('/api/captures', {
         method: 'POST',
@@ -297,11 +301,11 @@ function MonitorScreen() {
           status: pendingCapture.status,
         }),
       })
-
+ 
       if (!response.ok) {
         throw new Error('Save failed')
       }
-
+ 
       const data = (await response.json()) as { capture: SavedCapture }
       setCaptures((current) => [data.capture, ...current].slice(0, 4))
       setSaveMessage(`"${data.capture.name ?? trimmedName}" saved to image store.`)
@@ -314,30 +318,30 @@ function MonitorScreen() {
       setSaving(false)
     }
   }, [captureName, pendingCapture])
-
+ 
   useEffect(() => {
     if (openMenuId === null) {
       return
     }
-
+ 
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as HTMLElement
       if (!target.closest('.thumb-menu-wrap')) {
         setOpenMenuId(null)
       }
     }
-
+ 
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [openMenuId])
-
+ 
   const startRename = useCallback((capture: SavedCapture) => {
     setOpenMenuId(null)
     setRenameTarget(capture)
     setRenameValue(capture.name ?? '')
     setRenameError('')
   }, [])
-
+ 
   const cancelRename = useCallback(() => {
     if (renaming) {
       return
@@ -346,32 +350,32 @@ function MonitorScreen() {
     setRenameValue('')
     setRenameError('')
   }, [renaming])
-
+ 
   const confirmRename = useCallback(async () => {
     if (!renameTarget) {
       return
     }
-
+ 
     const trimmed = renameValue.trim()
-
+ 
     if (!trimmed) {
       setRenameError('Enter a name for this snapshot.')
       return
     }
-
+ 
     setRenaming(true)
-
+ 
     try {
       const response = await fetch(`/api/capture-item/${renameTarget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed }),
       })
-
+ 
       if (!response.ok) {
         throw new Error('Rename failed')
       }
-
+ 
       const data = (await response.json()) as { capture: SavedCapture }
       setCaptures((current) =>
         current.map((item) => (item.id === data.capture.id ? data.capture : item)),
@@ -385,7 +389,7 @@ function MonitorScreen() {
       setRenaming(false)
     }
   }, [renameTarget, renameValue])
-
+ 
   const handleDownload = useCallback((capture: SavedCapture) => {
     setOpenMenuId(null)
     const extension = capture.blobKey.split('.').pop() || 'jpg'
@@ -396,28 +400,28 @@ function MonitorScreen() {
     link.click()
     link.remove()
   }, [])
-
+ 
   const handleDelete = useCallback(async (capture: SavedCapture) => {
     setOpenMenuId(null)
-
+ 
     const confirmed = window.confirm(
       `Delete "${capture.name || 'this snapshot'}"? This can't be undone.`,
     )
     if (!confirmed) {
       return
     }
-
+ 
     setDeletingId(capture.id)
-
+ 
     try {
       const response = await fetch(`/api/capture-item/${capture.id}`, {
         method: 'DELETE',
       })
-
+ 
       if (!response.ok) {
         throw new Error('Delete failed')
       }
-
+ 
       setCaptures((current) => current.filter((item) => item.id !== capture.id))
     } catch {
       setSaveMessage('Could not delete that capture. Try again.')
@@ -425,14 +429,36 @@ function MonitorScreen() {
       setDeletingId(null)
     }
   }, [])
-
+ 
+  const handleAnalyze = useCallback(async (capture: SavedCapture) => {
+    setOpenMenuId(null)
+    setPredictions((current) => ({ ...current, [capture.id]: 'loading' }))
+ 
+    try {
+      const response = await fetch('/api/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blobKey: capture.blobKey }),
+      })
+ 
+      if (!response.ok) {
+        throw new Error('Prediction failed')
+      }
+ 
+      const data = (await response.json()) as { predictedHb: number; status: string }
+      setPredictions((current) => ({ ...current, [capture.id]: data }))
+    } catch {
+      setPredictions((current) => ({ ...current, [capture.id]: 'error' }))
+    }
+  }, [])
+ 
   const glow = useMemo(() => Math.max(0.25, metrics.overall / 100), [metrics.overall])
-
+ 
   return (
     <main className="min-h-screen overflow-hidden bg-[#050A14] text-cyan-50">
       <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_18%_10%,rgba(0,229,212,0.18),transparent_30%),radial-gradient(circle_at_86%_26%,rgba(60,255,143,0.12),transparent_26%),linear-gradient(135deg,rgba(5,10,20,1),rgba(5,10,20,0.86))]" />
       <div className="fixed inset-0 pointer-events-none opacity-[0.13] scan-field" />
-
+ 
       <section className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-5 sm:px-6 lg:px-8">
         <header className="glass-panel header-grid mb-6 flex items-center justify-between gap-4 px-4 py-3">
           <div className="flex items-center gap-3">
@@ -446,7 +472,7 @@ function MonitorScreen() {
           </div>
           <StatusIndicator label="READY TO CAPTURE" />
         </header>
-
+ 
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
             <p className="micro-label">SECTION</p>
@@ -454,7 +480,7 @@ function MonitorScreen() {
           </div>
           <ThresholdIndicator />
         </div>
-
+ 
         <div className="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.32fr)_minmax(360px,0.68fr)]">
           <section className="glass-panel camera-shell p-3 sm:p-4">
             <div
@@ -484,7 +510,7 @@ function MonitorScreen() {
               <div className="live-badge">LIVE</div>
               <ScoreDisplay value={metrics.overall} />
             </div>
-
+ 
             <div className="mt-5 flex items-center justify-center gap-5">
               <button
                 className="round-control"
@@ -512,7 +538,7 @@ function MonitorScreen() {
                 <small>CAMERA</small>
               </div>
             </div>
-
+ 
             <div className="mt-4 flex min-h-6 items-center justify-center gap-2 text-xs uppercase tracking-[0.24em] text-cyan-100/70">
               {accepted ? <Save size={14} /> : <ShieldAlert size={14} className="text-amber-300" />}
               <span>
@@ -523,7 +549,7 @@ function MonitorScreen() {
               </span>
             </div>
           </section>
-
+ 
           <aside className="glass-panel analysis-panel p-4 sm:p-5">
             <div className="mb-5 flex items-center justify-between gap-4">
               <div>
@@ -535,13 +561,13 @@ function MonitorScreen() {
                 {status}
               </div>
             </div>
-
+ 
             <div className="space-y-5">
               <MetricBar label="BRIGHTNESS" value={metrics.brightness} />
               <MetricBar label="SHARPNESS" value={metrics.sharpness} />
               <MetricBar label="CONTRAST" value={metrics.contrast} />
             </div>
-
+ 
             <div
               className="overall-orb"
               style={{
@@ -554,7 +580,7 @@ function MonitorScreen() {
               </div>
               <ScanLine size={36} />
             </div>
-
+ 
             <div className="capture-list">
               <div className="mb-3 flex items-center justify-between">
                 <span className="micro-label">SAVED SNAPSHOTS</span>
@@ -584,12 +610,12 @@ function MonitorScreen() {
                           {Math.round(capture.overall)}
                         </span>
                       </a>
-
+ 
                       <div className="thumb-footer">
                         <span className="thumb-name">
                           {capture.name || new Date(capture.createdAt).toLocaleTimeString()}
                         </span>
-
+ 
                         <div className="thumb-menu-wrap">
                           <button
                             type="button"
@@ -606,9 +632,13 @@ function MonitorScreen() {
                               <MoreVertical size={16} />
                             )}
                           </button>
-
+ 
                           {openMenuId === capture.id && (
                             <div className="thumb-menu">
+                              <button type="button" onClick={() => handleAnalyze(capture)}>
+                                <Activity size={14} />
+                                Analyze
+                              </button>
                               <button type="button" onClick={() => startRename(capture)}>
                                 <PencilLine size={14} />
                                 Rename
@@ -629,6 +659,33 @@ function MonitorScreen() {
                           )}
                         </div>
                       </div>
+ 
+                      {predictions[capture.id] === 'loading' && (
+                        <div className="thumb-prediction thumb-prediction-loading">
+                          <Loader2 size={13} className="animate-spin" />
+                          <span>Analyzing...</span>
+                        </div>
+                      )}
+                      {predictions[capture.id] === 'error' && (
+                        <div className="thumb-prediction thumb-prediction-error">
+                          <ShieldAlert size={13} />
+                          <span>Analysis failed</span>
+                        </div>
+                      )}
+                      {predictions[capture.id] &&
+                        predictions[capture.id] !== 'loading' &&
+                        predictions[capture.id] !== 'error' && (
+                          <div className="thumb-prediction">
+                            <Activity size={13} />
+                            <span>
+                              {(predictions[capture.id] as { predictedHb: number; status: string })
+                                .predictedHb}{' '}
+                              g/dL —{' '}
+                              {(predictions[capture.id] as { predictedHb: number; status: string })
+                                .status}
+                            </span>
+                          </div>
+                        )}
                     </div>
                   ))}
                 </div>
@@ -673,7 +730,7 @@ function MonitorScreen() {
     </main>
   )
 }
-
+ 
 function NameCaptureDialog({
   pendingCapture,
   name,
@@ -693,23 +750,23 @@ function NameCaptureDialog({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const accepted = pendingCapture.status === 'READY'
-
+ 
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [])
-
+ 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape' && !saving) {
         onCancel()
       }
     }
-
+ 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onCancel, saving])
-
+ 
   return (
     <div
       className="dialog-overlay"
@@ -738,7 +795,7 @@ function NameCaptureDialog({
             <X size={18} />
           </button>
         </div>
-
+ 
         <div className="dialog-preview">
           <img src={pendingCapture.dataUrl} alt="Captured frame preview" />
           <div className={`status-chip dialog-preview-chip ${accepted ? 'ready' : 'warning'}`}>
@@ -746,7 +803,7 @@ function NameCaptureDialog({
             {pendingCapture.status} · {round(pendingCapture.metrics.overall)}
           </div>
         </div>
-
+ 
         <label className="dialog-label" htmlFor="capture-name-input">
           FILE NAME
         </label>
@@ -768,7 +825,7 @@ function NameCaptureDialog({
           }}
         />
         {error && <p className="dialog-error">{error}</p>}
-
+ 
         <div className="mt-5 flex items-center justify-end gap-3">
           <button
             type="button"
@@ -792,7 +849,7 @@ function NameCaptureDialog({
     </div>
   )
 }
-
+ 
 function RenameDialog({
   capture,
   name,
@@ -811,23 +868,23 @@ function RenameDialog({
   onConfirm: () => void
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
-
+ 
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [])
-
+ 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape' && !saving) {
         onCancel()
       }
     }
-
+ 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onCancel, saving])
-
+ 
   return (
     <div
       className="dialog-overlay"
@@ -856,11 +913,11 @@ function RenameDialog({
             <X size={18} />
           </button>
         </div>
-
+ 
         <div className="dialog-preview">
           <img src={capture.imageUrl} alt={capture.name || 'Saved capture'} />
         </div>
-
+ 
         <label className="dialog-label" htmlFor="rename-input">
           FILE NAME
         </label>
@@ -881,7 +938,7 @@ function RenameDialog({
           }}
         />
         {error && <p className="dialog-error">{error}</p>}
-
+ 
         <div className="mt-5 flex items-center justify-end gap-3">
           <button
             type="button"
@@ -905,7 +962,7 @@ function RenameDialog({
     </div>
   )
 }
-
+ 
 function StatusIndicator({ label }: { label: string }) {
   return (
     <div className="system-status">
@@ -914,7 +971,7 @@ function StatusIndicator({ label }: { label: string }) {
     </div>
   )
 }
-
+ 
 function ThresholdIndicator() {
   return (
     <div className="threshold-card">
@@ -923,7 +980,7 @@ function ThresholdIndicator() {
     </div>
   )
 }
-
+ 
 function MetricBar({ label, value }: { label: string; value: number }) {
   return (
     <div className="metric">
@@ -937,7 +994,7 @@ function MetricBar({ label, value }: { label: string; value: number }) {
     </div>
   )
 }
-
+ 
 function ScoreDisplay({ value }: { value: number }) {
   return (
     <div className="score-display">
@@ -946,3 +1003,4 @@ function ScoreDisplay({ value }: { value: number }) {
     </div>
   )
 }
+ 
