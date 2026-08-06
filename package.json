@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev --port 3000",
-    "build": "vite build"
+    "build": "vite build",
+    "postinstall": "node scripts/prune-native-deps.js"
   },
   "dependencies": {
     "@netlify/blobs": "^10.7.9",
@@ -19,7 +20,7 @@
     "chart.js": "4.5.1",
     "drizzle-orm": "^1.0.0-beta.22",
     "lucide-react": "0.576.0",
-    "onnxruntime-node": "^1.20.1",
+    "onnxruntime-node": "^1.27.0",
     "react": "19.2.6",
     "react-chartjs-2": "5.3.1",
     "react-dom": "19.2.6",
@@ -42,12 +43,3 @@
     "vite": "7.3.3"
   }
 }
-
-
-
-
-
-
-
-
-
