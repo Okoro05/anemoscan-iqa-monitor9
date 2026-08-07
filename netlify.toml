@@ -1,13 +1,7 @@
+
 [build]
   command = "vite build"
   publish = "dist/client"
- 
-[functions]
-  node_bundler = "esbuild"
- 
-[functions."predict"]
-  external_node_modules = ["onnxruntime-node", "sharp"]
-  included_files = ["netlify/functions/model/model.onnx"]
  
 [dev]
   command = "npm run dev"
