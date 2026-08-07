@@ -25,6 +25,7 @@ export const Route = createFileRoute('/')({
 })
  
 const qualityThreshold = 65
+const predictionApiUrl = 'https://anemoscan-inference.onrender.com'
  
 type FacingMode = 'user' | 'environment'
 type Metrics = {
@@ -435,10 +436,21 @@ function MonitorScreen() {
     setPredictions((current) => ({ ...current, [capture.id]: 'loading' }))
  
     try {
-      const response = await fetch('/api/predict', {
+      // Fetch the already-saved image from Netlify Blobs (via its existing
+      // public URL), since the external Render service has no direct access
+      // to Netlify's storage.
+      const imageResponse = await fetch(capture.imageUrl)
+      if (!imageResponse.ok) {
+        throw new Error('Could not load saved image')
+      }
+      const imageBlob = await imageResponse.blob()
+ 
+      const formData = new FormData()
+      formData.append('file', imageBlob, 'capture.jpg')
+ 
+      const response = await fetch(`${predictionApiUrl}/predict`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ blobKey: capture.blobKey }),
+        body: formData,
       })
  
       if (!response.ok) {
@@ -663,7 +675,7 @@ function MonitorScreen() {
                       {predictions[capture.id] === 'loading' && (
                         <div className="thumb-prediction thumb-prediction-loading">
                           <Loader2 size={13} className="animate-spin" />
-                          <span>Analyzing...</span>
+                          <span>Analyzing (may take ~30s on first use)...</span>
                         </div>
                       )}
                       {predictions[capture.id] === 'error' && (
