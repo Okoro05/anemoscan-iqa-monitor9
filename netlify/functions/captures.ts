@@ -38,6 +38,13 @@ function sanitizeName(rawName: unknown): string | null {
   return cleaned || null
 }
 
+function sanitizeCameraLabel(rawLabel: unknown): 'FRONT' | 'BACK' | 'IMPORT' {
+  if (rawLabel === 'FRONT' || rawLabel === 'IMPORT') {
+    return rawLabel
+  }
+  return 'BACK'
+}
+
 const captureStore = getStore('hemovision-captures')
 
 function numberValue(value: unknown) {
@@ -76,14 +83,31 @@ function toResponse(row: typeof captures.$inferSelect) {
   }
 }
 
-async function listCaptures() {
+const DEFAULT_LIMIT = 8
+const MAX_LIMIT = 50
+
+async function listCaptures(req: Request) {
+  const url = new URL(req.url)
+
+  const rawLimit = Number(url.searchParams.get('limit'))
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, MAX_LIMIT)
+    : DEFAULT_LIMIT
+
+  const rawOffset = Number(url.searchParams.get('offset'))
+  const offset = Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
+
   const rows = await db
     .select()
     .from(captures)
     .orderBy(desc(captures.createdAt))
-    .limit(8)
+    .limit(limit)
+    .offset(offset)
 
-  return Response.json({ captures: rows.map(toResponse) })
+  return Response.json({
+    captures: rows.map(toResponse),
+    hasMore: rows.length === limit,
+  })
 }
 
 async function saveCapture(req: Request) {
@@ -116,7 +140,7 @@ async function saveCapture(req: Request) {
       blobKey,
       name,
       status: payload.status === 'READY' ? 'READY' : 'LOW QUALITY',
-      cameraLabel: payload.cameraLabel === 'FRONT' ? 'FRONT' : 'BACK',
+      cameraLabel: sanitizeCameraLabel(payload.cameraLabel),
       threshold: Math.min(65, Math.max(55, Number(payload.threshold) || 60)),
       brightness: numberValue(metrics.brightness),
       sharpness: numberValue(metrics.sharpness),
@@ -132,7 +156,7 @@ async function saveCapture(req: Request) {
 export default async (req: Request) => {
   try {
     if (req.method === 'GET') {
-      return listCaptures()
+      return listCaptures(req)
     }
 
     if (req.method === 'POST') {
