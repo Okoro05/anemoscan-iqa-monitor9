@@ -804,6 +804,34 @@ a {
   background: rgba(255, 94, 94, 0.14) !important;
   color: #ffd6d6 !important;
 }
+
+.load-more-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid rgba(0, 229, 212, 0.28);
+  border-radius: 12px;
+  padding: 11px 14px;
+  color: rgba(0, 229, 212, 0.9);
+  background: rgba(0, 229, 212, 0.05);
+  font-family: "Share Tech Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  border-color: rgba(0, 229, 212, 0.55);
+  background: rgba(0, 229, 212, 0.1);
+}
+
+.load-more-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
  
 @keyframes dialog-fade {
   from {
