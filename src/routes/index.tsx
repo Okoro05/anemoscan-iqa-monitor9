@@ -19,7 +19,6 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
 
 export const Route = createFileRoute('/')({
   component: MonitorScreen,
@@ -34,10 +33,7 @@ type Metrics = {
   sharpness: number
   contrast: number
   overall: number
-  distanceStatus: DistanceStatus
-  skinRatio: number
 }
-type DistanceStatus = 'too-far' | 'too-close' | 'good'
 type SavedCapture = Metrics & {
   id: number
   blobKey: string
@@ -69,15 +65,7 @@ const initialMetrics: Metrics = {
   sharpness: 72,
   contrast: 54,
   overall: 61,
-  distanceStatus: 'good',
-  skinRatio: 0.4,
 }
-
-// How much of the frame should be filled by skin/eye-tissue tone for a
-// well-framed close-up conjunctiva shot. Tuned as a starting point --
-// adjust these two numbers based on real-world testing on real devices.
-const MIN_SKIN_RATIO = 0.12 // below this: subject is too far away
-const MAX_SKIN_RATIO = 0.78 // above this: subject is too close
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value))
@@ -87,32 +75,15 @@ function round(value: number) {
   return Math.round(clamp(value))
 }
 
-function isSkinTone(r: number, g: number, b: number) {
-  // Standard YCbCr-based skin detection range -- works reasonably across
-  // a wide range of skin tones and lighting conditions.
-  const y = 0.299 * r + 0.587 * g + 0.114 * b
-  const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b
-  const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b
-  return y > 40 && cb >= 77 && cb <= 135 && cr >= 133 && cr <= 180
-}
-
 function calculateMetricsFromImageData(imageData: ImageData): Metrics {
   const { data, width, height } = imageData
   const luminance = new Float32Array(width * height)
   let sum = 0
-  let skinPixels = 0
 
   for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
-    const r = data[i]
-    const g = data[i + 1]
-    const b = data[i + 2]
-    const gray = r * 0.299 + g * 0.587 + b * 0.114
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114
     luminance[pixel] = gray
     sum += gray
-
-    if (isSkinTone(r, g, b)) {
-      skinPixels += 1
-    }
   }
 
   const mean = sum / luminance.length
@@ -146,11 +117,7 @@ function calculateMetricsFromImageData(imageData: ImageData): Metrics {
   )
   const overall = clamp(brightness * 0.3 + sharpness * 0.4 + contrast * 0.3)
 
-  const skinRatio = skinPixels / luminance.length
-  const distanceStatus: DistanceStatus =
-    skinRatio < MIN_SKIN_RATIO ? 'too-far' : skinRatio > MAX_SKIN_RATIO ? 'too-close' : 'good'
-
-  return { brightness, sharpness, contrast, overall, distanceStatus, skinRatio }
+  return { brightness, sharpness, contrast, overall }
 }
 
 function MonitorScreen() {
@@ -175,15 +142,8 @@ function MonitorScreen() {
   const [predictions, setPredictions] = useState<
     Record<number, { predictedHb: number; status: string } | 'loading' | 'error'>
   >({})
-  const [importQueue, setImportQueue] = useState<File[]>([])
-  const [isImportedCapture, setIsImportedCapture] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [hasMoreCaptures, setHasMoreCaptures] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
 
-  const qualityOk = metrics.overall >= qualityThreshold
-  const distanceOk = metrics.distanceStatus === 'good'
-  const accepted = qualityOk && distanceOk
+  const accepted = metrics.overall >= qualityThreshold
   const status = accepted ? 'READY' : 'LOW QUALITY'
   const cameraLabel = facingMode === 'user' ? 'FRONT' : 'BACK'
 
@@ -234,9 +194,8 @@ function MonitorScreen() {
       try {
         const response = await fetch('/api/captures')
         if (response.ok) {
-          const data = (await response.json()) as { captures: SavedCapture[]; hasMore?: boolean }
+          const data = (await response.json()) as { captures: SavedCapture[] }
           setCaptures(data.captures)
-          setHasMoreCaptures(Boolean(data.hasMore))
         }
       } catch {
         setCaptures([])
@@ -245,22 +204,6 @@ function MonitorScreen() {
 
     loadCaptures()
   }, [])
-
-  const loadMoreCaptures = useCallback(async () => {
-    setLoadingMore(true)
-    try {
-      const response = await fetch(`/api/captures?offset=${captures.length}`)
-      if (response.ok) {
-        const data = (await response.json()) as { captures: SavedCapture[]; hasMore?: boolean }
-        setCaptures((current) => [...current, ...data.captures])
-        setHasMoreCaptures(Boolean(data.hasMore))
-      }
-    } catch {
-      setSaveMessage('Could not load more snapshots. Try again.')
-    } finally {
-      setLoadingMore(false)
-    }
-  }, [captures.length])
 
   const analyzeFrame = useCallback(() => {
     const video = videoRef.current
@@ -291,13 +234,7 @@ function MonitorScreen() {
 
   const captureSnapshot = useCallback(() => {
     if (!accepted) {
-      if (metrics.distanceStatus === 'too-far') {
-        setSaveMessage('Subject is too far away. Move closer before capturing.')
-      } else if (metrics.distanceStatus === 'too-close') {
-        setSaveMessage('Subject is too close. Move back before capturing.')
-      } else {
-        setSaveMessage(`Score must reach ${qualityThreshold} before you can capture.`)
-      }
+      setSaveMessage(`Score must reach ${qualityThreshold} before you can capture.`)
       return
     }
 
@@ -329,107 +266,7 @@ function MonitorScreen() {
     setCaptureName(defaultCaptureName(capturedAt))
     setNameError('')
     setSaveMessage('')
-    setIsImportedCapture(false)
   }, [accepted, cameraLabel, metrics, status])
-
-  const loadFileAsPendingCapture = useCallback((file: File) => {
-    const objectUrl = URL.createObjectURL(file)
-    const img = new Image()
-
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = img.naturalWidth
-      canvas.height = img.naturalHeight
-      const context = canvas.getContext('2d')
-
-      if (!context) {
-        URL.revokeObjectURL(objectUrl)
-        setSaveMessage(`Could not read "${file.name}" as an image.`)
-        return
-      }
-
-      context.drawImage(img, 0, 0)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
-
-      // Run the exact same quality analysis used for live captures, on a
-      // downscaled version of this image, so imported photos are scored
-      // consistently with camera captures.
-      const analysisWidth = 160
-      const analysisHeight = Math.max(
-        90,
-        Math.round((canvas.height / canvas.width) * analysisWidth),
-      )
-      const analysisCanvas = document.createElement('canvas')
-      analysisCanvas.width = analysisWidth
-      analysisCanvas.height = analysisHeight
-      const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true })
-
-      let importedMetrics = initialMetrics
-      if (analysisContext) {
-        analysisContext.drawImage(img, 0, 0, analysisWidth, analysisHeight)
-        importedMetrics = calculateMetricsFromImageData(
-          analysisContext.getImageData(0, 0, analysisWidth, analysisHeight),
-        )
-      }
-
-      const importedStatus = importedMetrics.overall >= qualityThreshold ? 'READY' : 'LOW QUALITY'
-      const capturedAt = new Date()
-
-      setIsImportedCapture(true)
-      setPendingCapture({
-        dataUrl,
-        metrics: importedMetrics,
-        cameraLabel: 'IMPORT',
-        status: importedStatus,
-        capturedAt,
-      })
-      setCaptureName(file.name.replace(/\.[^./]+$/, '') || defaultCaptureName(capturedAt))
-      setNameError('')
-      setSaveMessage('')
-      URL.revokeObjectURL(objectUrl)
-    }
-
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl)
-      setSaveMessage(`Could not read "${file.name}" as an image.`)
-    }
-
-    img.src = objectUrl
-  }, [])
-
-  const handleImportClick = useCallback(() => {
-    fileInputRef.current?.click()
-  }, [])
-
-  const handleFilesSelected = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.target.files ?? [])
-      event.target.value = '' // allow re-selecting the same file later
-
-      if (files.length === 0) {
-        return
-      }
-
-      const [first, ...rest] = files
-      setImportQueue(rest)
-      loadFileAsPendingCapture(first)
-    },
-    [loadFileAsPendingCapture],
-  )
-
-  // After finishing (saving or discarding) an imported capture, automatically
-  // load the next file in the queue, if any.
-  useEffect(() => {
-    if (pendingCapture || !isImportedCapture) {
-      return
-    }
-    if (importQueue.length === 0) {
-      return
-    }
-    const [next, ...rest] = importQueue
-    setImportQueue(rest)
-    loadFileAsPendingCapture(next)
-  }, [pendingCapture, isImportedCapture, importQueue, loadFileAsPendingCapture])
 
   const cancelPendingCapture = useCallback(() => {
     setPendingCapture(null)
@@ -446,6 +283,12 @@ function MonitorScreen() {
 
     if (!trimmedName) {
       setNameError('Enter a name for this snapshot before saving.')
+      return
+    }
+
+    const formatError = getNameFormatError(trimmedName)
+    if (formatError) {
+      setNameError(formatError)
       return
     }
 
@@ -466,12 +309,20 @@ function MonitorScreen() {
         }),
       })
 
+      if (response.status === 409) {
+        const data = await response.json().catch(() => null)
+        setNameError(data?.error || 'This name is already used by another snapshot.')
+        return
+      }
+
       if (!response.ok) {
-        throw new Error('Save failed')
+        const data = await response.json().catch(() => null)
+        setNameError(data?.error || 'Capture could not be saved. Try again.')
+        return
       }
 
       const data = (await response.json()) as { capture: SavedCapture }
-      setCaptures((current) => [data.capture, ...current])
+      setCaptures((current) => [data.capture, ...current].slice(0, 4))
       setSaveMessage(`"${data.capture.name ?? trimmedName}" saved to image store.`)
       setPendingCapture(null)
       setCaptureName('')
@@ -527,6 +378,12 @@ function MonitorScreen() {
       return
     }
 
+    const formatError = getNameFormatError(trimmed)
+    if (formatError) {
+      setRenameError(formatError)
+      return
+    }
+
     setRenaming(true)
 
     try {
@@ -536,8 +393,16 @@ function MonitorScreen() {
         body: JSON.stringify({ name: trimmed }),
       })
 
+      if (response.status === 409) {
+        const data = await response.json().catch(() => null)
+        setRenameError(data?.error || 'This name is already used by another snapshot.')
+        return
+      }
+
       if (!response.ok) {
-        throw new Error('Rename failed')
+        const data = await response.json().catch(() => null)
+        setRenameError(data?.error || 'Could not rename this capture. Try again.')
+        return
       }
 
       const data = (await response.json()) as { capture: SavedCapture }
@@ -720,11 +585,7 @@ function MonitorScreen() {
                 {saveMessage ||
                   (accepted
                     ? 'Snap a frame, then name it to save'
-                    : metrics.distanceStatus === 'too-far'
-                      ? 'Too far — move closer'
-                      : metrics.distanceStatus === 'too-close'
-                        ? 'Too close — move back'
-                        : `Score must reach ${qualityThreshold} to unlock capture`)}
+                    : `Score must reach ${qualityThreshold} to unlock capture`)}
               </span>
             </div>
           </section>
@@ -763,22 +624,7 @@ function MonitorScreen() {
             <div className="capture-list">
               <div className="mb-3 flex items-center justify-between">
                 <span className="micro-label">SAVED SNAPSHOTS</span>
-                <button
-                  type="button"
-                  className="text-cyan-200/70 transition-colors hover:text-cyan-200"
-                  aria-label="Import images from this device"
-                  onClick={handleImportClick}
-                >
-                  <ImagePlus size={17} />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={handleFilesSelected}
-                />
+                <ImagePlus size={17} className="text-cyan-200/70" />
               </div>
               {captures.length === 0 ? (
                 <div className="empty-capture">
@@ -884,23 +730,6 @@ function MonitorScreen() {
                   ))}
                 </div>
               )}
-              {hasMoreCaptures && (
-                <button
-                  type="button"
-                  className="load-more-btn"
-                  onClick={loadMoreCaptures}
-                  disabled={loadingMore}
-                >
-                  {loadingMore ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin" />
-                      Loading...
-                    </>
-                  ) : (
-                    'Load more snapshots'
-                  )}
-                </button>
-              )}
             </div>
           </aside>
         </div>
@@ -940,6 +769,16 @@ function MonitorScreen() {
       )}
     </main>
   )
+}
+
+function getNameFormatError(name: string): string | null {
+  if (/\s/.test(name)) {
+    return 'Name cannot contain spaces. Try hyphens or underscores instead.'
+  }
+  if (/[A-Z]/.test(name)) {
+    return 'Name cannot contain capital letters. Use lowercase only.'
+  }
+  return null
 }
 
 function NameCaptureDialog({
@@ -1016,7 +855,7 @@ function NameCaptureDialog({
         </div>
 
         <label className="dialog-label" htmlFor="capture-name-input">
-          FILE NAME
+          FILE NAME (lowercase, no spaces)
         </label>
         <input
           id="capture-name-input"
@@ -1130,7 +969,7 @@ function RenameDialog({
         </div>
 
         <label className="dialog-label" htmlFor="rename-input">
-          FILE NAME
+          FILE NAME (lowercase, no spaces)
         </label>
         <input
           id="rename-input"
