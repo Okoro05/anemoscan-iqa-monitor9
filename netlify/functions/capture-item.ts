@@ -1,6 +1,6 @@
 import { getStore } from '@netlify/blobs'
 import type { Config } from '@netlify/functions'
-import { eq } from 'drizzle-orm'
+import { and, eq, ne } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
 import { captures } from '../../db/schema.js'
@@ -23,6 +23,19 @@ function sanitizeName(rawName: unknown): string | null {
   const cleaned = trimmed.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim()
 
   return cleaned || null
+}
+
+// Enforced naming rule: no spaces, no capital letters. Checked server-side
+// as the source of truth (the frontend also checks this for instant
+// feedback, but this is what actually gets relied on).
+function getNameFormatError(name: string): string | null {
+  if (/\s/.test(name)) {
+    return 'Name cannot contain spaces.'
+  }
+  if (/[A-Z]/.test(name)) {
+    return 'Name cannot contain capital letters.'
+  }
+  return null
 }
 
 function toResponse(row: typeof captures.$inferSelect) {
@@ -55,6 +68,25 @@ async function renameCapture(id: number, req: Request) {
 
   if (!name) {
     return Response.json({ error: 'A valid name is required' }, { status: 400 })
+  }
+
+  const formatError = getNameFormatError(name)
+  if (formatError) {
+    return Response.json({ error: formatError }, { status: 400 })
+  }
+
+  // Check for a duplicate name against every OTHER capture (excluding this
+  // one, so renaming to the name it already has doesn't falsely conflict).
+  const [existing] = await db
+    .select()
+    .from(captures)
+    .where(and(eq(captures.name, name), ne(captures.id, id)))
+
+  if (existing) {
+    return Response.json(
+      { error: 'This name is already used by another snapshot. Choose a different name.' },
+      { status: 409 },
+    )
   }
 
   const [row] = await db
