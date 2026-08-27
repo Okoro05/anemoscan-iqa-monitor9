@@ -1,6 +1,6 @@
 import { getStore } from '@netlify/blobs'
 import type { Config } from '@netlify/functions'
-import { desc } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 
 import { db } from '../../db/index.js'
 import { captures } from '../../db/schema.js'
@@ -38,11 +38,17 @@ function sanitizeName(rawName: unknown): string | null {
   return cleaned || null
 }
 
-function sanitizeCameraLabel(rawLabel: unknown): 'FRONT' | 'BACK' | 'IMPORT' {
-  if (rawLabel === 'FRONT' || rawLabel === 'IMPORT') {
-    return rawLabel
+// Enforced naming rule: no spaces, no capital letters. Checked server-side
+// as the source of truth (the frontend also checks this for instant
+// feedback, but this is what actually gets relied on).
+function getNameFormatError(name: string): string | null {
+  if (/\s/.test(name)) {
+    return 'Name cannot contain spaces.'
   }
-  return 'BACK'
+  if (/[A-Z]/.test(name)) {
+    return 'Name cannot contain capital letters.'
+  }
+  return null
 }
 
 const captureStore = getStore('hemovision-captures')
@@ -83,31 +89,14 @@ function toResponse(row: typeof captures.$inferSelect) {
   }
 }
 
-const DEFAULT_LIMIT = 8
-const MAX_LIMIT = 50
-
-async function listCaptures(req: Request) {
-  const url = new URL(req.url)
-
-  const rawLimit = Number(url.searchParams.get('limit'))
-  const limit = Number.isInteger(rawLimit) && rawLimit > 0
-    ? Math.min(rawLimit, MAX_LIMIT)
-    : DEFAULT_LIMIT
-
-  const rawOffset = Number(url.searchParams.get('offset'))
-  const offset = Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
-
+async function listCaptures() {
   const rows = await db
     .select()
     .from(captures)
     .orderBy(desc(captures.createdAt))
-    .limit(limit)
-    .offset(offset)
+    .limit(8)
 
-  return Response.json({
-    captures: rows.map(toResponse),
-    hasMore: rows.length === limit,
-  })
+  return Response.json({ captures: rows.map(toResponse) })
 }
 
 async function saveCapture(req: Request) {
@@ -117,17 +106,33 @@ async function saveCapture(req: Request) {
     return Response.json({ error: 'Missing image data' }, { status: 400 })
   }
 
+  const name = sanitizeName(payload.name)
+
+  if (!name) {
+    return Response.json({ error: 'A valid name is required' }, { status: 400 })
+  }
+
+  const formatError = getNameFormatError(name)
+  if (formatError) {
+    return Response.json({ error: formatError }, { status: 400 })
+  }
+
+  const [existing] = await db.select().from(captures).where(eq(captures.name, name))
+  if (existing) {
+    return Response.json(
+      { error: 'This name is already used by another snapshot. Choose a different name.' },
+      { status: 409 },
+    )
+  }
+
   const { contentType, buffer } = decodeDataUrl(payload.imageData)
   const now = new Date()
   const extension = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg'
-  const name = sanitizeName(payload.name)
   const slug = name
-    ? name
-        .toLowerCase()
-        .replace(/\s+/g, '-')
-        .replace(/[^a-z0-9-]/g, '')
-        .slice(0, 40)
-    : ''
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .slice(0, 40)
   const keyPrefix = slug ? `${slug}-` : ''
   const blobKey = `captures/${keyPrefix}${now.toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${extension}`
 
@@ -140,7 +145,7 @@ async function saveCapture(req: Request) {
       blobKey,
       name,
       status: payload.status === 'READY' ? 'READY' : 'LOW QUALITY',
-      cameraLabel: sanitizeCameraLabel(payload.cameraLabel),
+      cameraLabel: payload.cameraLabel === 'FRONT' ? 'FRONT' : 'BACK',
       threshold: Math.min(65, Math.max(55, Number(payload.threshold) || 60)),
       brightness: numberValue(metrics.brightness),
       sharpness: numberValue(metrics.sharpness),
@@ -156,7 +161,7 @@ async function saveCapture(req: Request) {
 export default async (req: Request) => {
   try {
     if (req.method === 'GET') {
-      return listCaptures(req)
+      return listCaptures()
     }
 
     if (req.method === 'POST') {
