@@ -703,12 +703,13 @@ function MonitorScreen() {
               }}
             >
               <video
-                ref={videoRef}
-                className="camera-video"
-                playsInline
-                muted
-                autoPlay
-              />
+  ref={videoRef}
+  className="camera-video"
+  style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+  playsInline
+  muted
+  autoPlay
+/>
               {!cameraReady && (
                 <div className="camera-fallback">
                   <Camera size={42} />
