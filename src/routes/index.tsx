@@ -29,7 +29,7 @@ const qualityThreshold = 65
 const predictionApiUrl = 'https://anemoscan-inference.onrender.com'
 
 type FacingMode = 'user' | 'environment'
-type DistanceStatus = 'too-far' | 'too-close' | 'good'
+type DistanceStatus = 'too-far' | 'too-close' | 'no-eye' | 'good'
 type Metrics = {
   brightness: number
   sharpness: number
@@ -37,6 +37,7 @@ type Metrics = {
   overall: number
   distanceStatus: DistanceStatus
   skinRatio: number
+  scleraRatio: number
 }
 type SavedCapture = Metrics & {
   id: number
@@ -71,13 +72,20 @@ const initialMetrics: Metrics = {
   overall: 61,
   distanceStatus: 'good',
   skinRatio: 0.4,
+  scleraRatio: 0.02,
 }
 
-// How much of the frame should be filled by skin/eye-tissue tone for a
-// well-framed close-up conjunctiva shot. Tuned as a starting point --
-// adjust these two numbers based on real-world testing on real devices.
-const MIN_SKIN_RATIO = 0.12 // below this: subject is too far away
-const MAX_SKIN_RATIO = 0.78 // above this: subject is too close
+// Framing rules for a proper close-up conjunctiva shot (not a full face).
+// Skin-tone coverage alone can't tell a full face apart from a close-up eye
+// -- both are mostly skin-colored. So we require BOTH:
+//   1. High skin coverage (forces the subject close, filling most of the frame)
+//   2. A minimum amount of visible sclera (white of the eye) -- this is the
+//      part that specifically confirms an open eye is in view, not just a
+//      close-up of a cheek, forehead, or other skin.
+// Tuned as a starting point -- adjust based on real-device testing.
+const MIN_SKIN_RATIO = 0.4 // below this: too far away / not filling the frame
+const MAX_SKIN_RATIO = 0.92 // above this: too close (lens blocked/no framing at all)
+const MIN_SCLERA_RATIO = 0.015 // below this: no clearly visible open eye in frame
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value))
@@ -96,11 +104,23 @@ function isSkinTone(r: number, g: number, b: number) {
   return y > 40 && cb >= 77 && cb <= 135 && cr >= 133 && cr <= 180
 }
 
+function isScleraTone(r: number, g: number, b: number) {
+  // Detects bright, low-saturation pixels -- typical of visible eye sclera
+  // (the white of the eye). This is the signal that distinguishes "an open
+  // eye is actually in frame" from "just a close-up of skin."
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const brightness = (r + g + b) / 3
+  const saturation = max === 0 ? 0 : (max - min) / max
+  return brightness > 140 && saturation < 0.25
+}
+
 function calculateMetricsFromImageData(imageData: ImageData): Metrics {
   const { data, width, height } = imageData
   const luminance = new Float32Array(width * height)
   let sum = 0
   let skinPixels = 0
+  let scleraPixels = 0
 
   for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
     const r = data[i]
@@ -112,6 +132,9 @@ function calculateMetricsFromImageData(imageData: ImageData): Metrics {
 
     if (isSkinTone(r, g, b)) {
       skinPixels += 1
+    }
+    if (isScleraTone(r, g, b)) {
+      scleraPixels += 1
     }
   }
 
@@ -147,10 +170,20 @@ function calculateMetricsFromImageData(imageData: ImageData): Metrics {
   const overall = clamp(brightness * 0.3 + sharpness * 0.4 + contrast * 0.3)
 
   const skinRatio = skinPixels / luminance.length
-  const distanceStatus: DistanceStatus =
-    skinRatio < MIN_SKIN_RATIO ? 'too-far' : skinRatio > MAX_SKIN_RATIO ? 'too-close' : 'good'
+  const scleraRatio = scleraPixels / luminance.length
 
-  return { brightness, sharpness, contrast, overall, distanceStatus, skinRatio }
+  let distanceStatus: DistanceStatus
+  if (skinRatio < MIN_SKIN_RATIO) {
+    distanceStatus = 'too-far'
+  } else if (skinRatio > MAX_SKIN_RATIO) {
+    distanceStatus = 'too-close'
+  } else if (scleraRatio < MIN_SCLERA_RATIO) {
+    distanceStatus = 'no-eye'
+  } else {
+    distanceStatus = 'good'
+  }
+
+  return { brightness, sharpness, contrast, overall, distanceStatus, skinRatio, scleraRatio }
 }
 
 function getNameFormatError(name: string): string | null {
@@ -305,6 +338,8 @@ function MonitorScreen() {
         setSaveMessage('Subject is too far away. Move closer before capturing.')
       } else if (metrics.distanceStatus === 'too-close') {
         setSaveMessage('Subject is too close. Move back before capturing.')
+      } else if (metrics.distanceStatus === 'no-eye') {
+        setSaveMessage('Position the eye clearly in frame -- the white of the eye must be visible.')
       } else {
         setSaveMessage(`Score must reach ${qualityThreshold} before you can capture.`)
       }
@@ -703,13 +738,13 @@ function MonitorScreen() {
               }}
             >
               <video
-  ref={videoRef}
-  className="camera-video"
-  style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
-  playsInline
-  muted
-  autoPlay
-/>
+                ref={videoRef}
+                className="camera-video"
+                style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+                playsInline
+                muted
+                autoPlay
+              />
               {!cameraReady && (
                 <div className="camera-fallback">
                   <Camera size={42} />
@@ -763,7 +798,9 @@ function MonitorScreen() {
                       ? 'Too far — move closer'
                       : metrics.distanceStatus === 'too-close'
                         ? 'Too close — move back'
-                        : `Score must reach ${qualityThreshold} to unlock capture`)}
+                        : metrics.distanceStatus === 'no-eye'
+                          ? 'Show the open eye clearly'
+                          : `Score must reach ${qualityThreshold} to unlock capture`)}
               </span>
             </div>
           </section>
