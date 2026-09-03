@@ -83,9 +83,9 @@ const initialMetrics: Metrics = {
 //      part that specifically confirms an open eye is in view, not just a
 //      close-up of a cheek, forehead, or other skin.
 // Tuned as a starting point -- adjust based on real-device testing.
-const MIN_SKIN_RATIO = 0.4 // below this: too far away / not filling the frame
-const MAX_SKIN_RATIO = 0.92 // above this: too close (lens blocked/no framing at all)
-const MIN_SCLERA_RATIO = 0.015 // below this: no clearly visible open eye in frame
+const MIN_SKIN_RATIO = 0.30 // below this: too far away / not filling the frame
+const MAX_SKIN_RATIO = 0.95 // above this: too close (lens blocked/no framing at all)
+const MIN_SCLERA_RATIO = 0.03 // below this: no clearly visible open eye in frame
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value))
