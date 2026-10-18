@@ -217,7 +217,10 @@ function MonitorScreen() {
   const [renaming, setRenaming] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [predictions, setPredictions] = useState<
-    Record<number, { predictedHb: number; status: string } | 'loading' | 'error'>
+    Record<
+      number,
+      { anemiaDetected: boolean; anemiaProbability: number; status: string } | 'loading' | 'error'
+    >
   >({})
   const [importQueue, setImportQueue] = useState<File[]>([])
   const [isImportedCapture, setIsImportedCapture] = useState(false)
@@ -693,7 +696,7 @@ function MonitorScreen() {
         throw new Error('Prediction failed')
       }
 
-      const data = (await response.json()) as { predictedHb: number; status: string }
+      const data = (await response.json()) as {   anemiaDetected: boolean   anemiaProbability: number   status: string }
       setPredictions((current) => ({ ...current, [capture.id]: data }))
     } catch {
       setPredictions((current) => ({ ...current, [capture.id]: 'error' }))
@@ -948,11 +951,20 @@ function MonitorScreen() {
                           <div className="thumb-prediction">
                             <Activity size={13} />
                             <span>
-                              {(predictions[capture.id] as { predictedHb: number; status: string })
-                                .predictedHb}{' '}
-                              g/dL —{' '}
-                              {(predictions[capture.id] as { predictedHb: number; status: string })
-                                .status}
+                               {(predictions[capture.id] as {
+                                anemiaDetected: boolean
+                                anemiaProbability: number
+                                status: string
+                              }).status}{' '}
+                              —{' '}
+                              {Math.round(
+                                (predictions[capture.id] as {
+                                  anemiaDetected: boolean
+                                  anemiaProbability: number
+                                  status: string
+                                }).anemiaProbability * 100,
+                              )}
+                              % probability
                             </span>
                           </div>
                         )}
