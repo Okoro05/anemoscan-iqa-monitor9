@@ -1,0 +1,38 @@
+name: Fix binary frontend syntax
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: binary-anemia-frontend
+          fetch-depth: 1
+      - name: Fix malformed response type
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/routes/index.tsx')
+          s = p.read_text()
+          old = "const data = (await response.json()) as {   anemiaDetected: boolean   anemiaProbability: number   status: string }"
+          new = "const data = (await response.json()) as {\n        anemiaDetected: boolean\n        anemiaProbability: number\n        status: string\n      }"
+          if old not in s:
+              raise SystemExit('Expected malformed line was not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/routes/index.tsx
+          git commit -m "Fix binary prediction response type syntax"
+          git push origin binary-anemia-frontend
+      - name: Remove temporary workflow
+        run: |
+          git rm .github/workflows/fix-binary-syntax.yml
+          git commit -m "Remove temporary syntax fix workflow"
+          git push origin binary-anemia-frontend
