@@ -1,7 +1,9 @@
 name: Fix binary frontend syntax
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - binary-anemia-frontend
 
 permissions:
   contents: write
@@ -14,7 +16,7 @@ jobs:
         with:
           ref: binary-anemia-frontend
           fetch-depth: 1
-      - name: Fix malformed response type
+      - name: Fix malformed response type and remove temporary workflow
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -26,13 +28,9 @@ jobs:
               raise SystemExit('Expected malformed line was not found')
           p.write_text(s.replace(old, new, 1))
           PY
+          git rm .github/workflows/fix-binary-syntax.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/routes/index.tsx
           git commit -m "Fix binary prediction response type syntax"
-          git push origin binary-anemia-frontend
-      - name: Remove temporary workflow
-        run: |
-          git rm .github/workflows/fix-binary-syntax.yml
-          git commit -m "Remove temporary syntax fix workflow"
           git push origin binary-anemia-frontend
