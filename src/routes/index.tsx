@@ -696,7 +696,11 @@ function MonitorScreen() {
         throw new Error('Prediction failed')
       }
 
-      const data = (await response.json()) as {   anemiaDetected: boolean   anemiaProbability: number   status: string }
+      const data = (await response.json()) as {
+        anemiaDetected: boolean
+        anemiaProbability: number
+        status: string
+      }
       setPredictions((current) => ({ ...current, [capture.id]: data }))
     } catch {
       setPredictions((current) => ({ ...current, [capture.id]: 'error' }))
